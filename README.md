@@ -28,7 +28,7 @@
 ## 🚀 Быстрый старт
 
 ### Необходимое ПО
-1. [VirtualBox](https://www.virtualbox.org/wiki/Downloads)
+1. [VirtualBox](https://www.virtualbox.org/wiki/Download_Old_Builds_7_2)
 2. [Ubuntu Server 22.04 LTS](https://ubuntu.com/download/server)
 
 ### Первые шаги
