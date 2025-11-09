@@ -7,8 +7,8 @@ on:
     types: [submitted]
 
 env:
-  PROJECT_NUMBER: 4  # ⬅️ У тебя уже правильный номер!
-  USER_LOGIN: virusneo1997-del  # ⬅️ Меняем ORGANIZATION на USER_LOGIN
+  PROJECT_NUMBER: 4  # Замените на ваш номер проекта из URL
+  USER_LOGIN: virusneo1997-del  # Ваш GitHub логин
 
 jobs:
   automate-project:
@@ -17,6 +17,8 @@ jobs:
       - name: 🎯 Автоматическое обновление карточек
         uses: actions/github-script@v6
         with:
+          # КРИТИЧЕСКИ ВАЖНО: Использование PAT для доступа к Projects
+          github-token: ${{ secrets.PROJECT_ACCESS_TOKEN }}
           script: |
             console.log('=== 🚀 ЗАПУСК АВТОМАТИЗАЦИИ ===');
             
@@ -38,7 +40,7 @@ jobs:
             console.log(`🔄 Статус PR: ${prState}`);
             console.log(`✅ Мерж: ${prMerged}`);
             
-            // ОПРЕДЕЛЯЕМ НОВЫЙ СТАТУС
+            // ОПРЕДЕЛЯЕМ НОВЫЙ СТАТУС ДЛЯ КАРТОЧКИ
             let newStatus = null;
             
             if (context.eventName === 'pull_request') {
@@ -46,21 +48,42 @@ jobs:
               
               switch (prAction) {
                 case 'opened':
-                case 'reopened':
+                  console.log('🎯 PR открыт - устанавливаем In Progress');
                   newStatus = 'In Progress';
                   break;
+                  
+                case 'reopened':
+                  console.log('🎯 PR переоткрыт - устанавливаем In Progress');
+                  newStatus = 'In Progress';
+                  break;
+                  
                 case 'ready_for_review':
+                  console.log('🎯 PR готов к проверке - устанавливаем In Review');
                   newStatus = 'In Review';
                   break;
+                  
                 case 'closed':
-                  newStatus = prMerged ? 'Done' : 'To do';
+                  if (prMerged) {
+                    console.log('🎯 PR мержен - устанавливаем Done');
+                    newStatus = 'Done';
+                  } else {
+                    console.log('🎯 PR закрыт без мержа - устанавливаем To do');
+                    newStatus = 'To do';
+                  }
                   break;
+                  
+                default:
+                  console.log(`ℹ️ Неизвестное действие: ${prAction}`);
               }
             }
             
+            // Обработка событий ревью
             if (context.eventName === 'pull_request_review') {
               const reviewState = context.payload.review.state;
+              console.log(`🔄 Обрабатываем ревью: ${reviewState}`);
+              
               if (reviewState === 'approved') {
+                console.log('🎯 Ревью approved - устанавливаем Done');
                 newStatus = 'Done';
               }
             }
@@ -73,7 +96,7 @@ jobs:
             console.log(`🎯 Устанавливаем новый статус: ${newStatus}`);
             
             try {
-              // ⚠️ ИСПРАВЛЕНИЕ: Используем user вместо organization
+              // 1. ПОЛУЧАЕМ ID ПРОЕКТА ЧЕРЕЗ GRAPHQL
               const projectQuery = `
                 query getProject($user: String!, $number: Int!) {
                   user(login: $user) {
@@ -102,13 +125,13 @@ jobs:
               `;
               
               const projectResult = await github.graphql(projectQuery, {
-                user: '${{ env.USER_LOGIN }}',  // ⬅️ Меняем org на user
-                number: ${{ env.PROJECT_NUMBER }}
+                user: process.env.USER_LOGIN,
+                number: process.env.PROJECT_NUMBER
               });
               
-              const project = projectResult.user.projectV2;  // ⬅️ Меняем organization на user
+              const project = projectResult.user.projectV2;
               if (!project) {
-                console.log('❌ Проект не найден. Проверь PROJECT_NUMBER');
+                console.log('❌ Проект не найден. Проверь PROJECT_NUMBER и USER_LOGIN');
                 return;
               }
               
@@ -119,15 +142,21 @@ jobs:
               const statusField = project.fields.nodes.find(field => field.name === 'Status');
               if (!statusField) {
                 console.log('❌ Поле Status не найдено в проекте');
+                console.log('📋 Доступные поля:', project.fields.nodes.map(f => f.name));
                 return;
               }
+              
+              console.log(`📋 Найдено поле Status: ${statusField.id}`);
               
               // 3. НАХОДИМ ОПЦИЮ СТАТУСА
               const statusOption = statusField.options.find(option => option.name === newStatus);
               if (!statusOption) {
                 console.log(`❌ Опция статуса '${newStatus}' не найдена`);
+                console.log('📋 Доступные опции:', statusField.options.map(o => o.name));
                 return;
               }
+              
+              console.log(`📋 Найдена опция статуса: ${statusOption.name} (ID: ${statusOption.id})`);
               
               // 4. ИЩЕМ КАРТОЧКУ СТУДЕНТА
               const itemsQuery = `
@@ -171,6 +200,15 @@ jobs:
               
               if (!studentItem) {
                 console.log(`❌ Карточка для студента ${author} не найдена`);
+                console.log('📋 Доступные студенты в проекте:');
+                items.forEach(item => {
+                  const githubField = item.fieldValues.nodes.find(f => 
+                    f.field && f.field.name === 'Student GitHub'
+                  );
+                  if (githubField) {
+                    console.log(`- ${githubField.text}`);
+                  }
+                });
                 return;
               }
               
@@ -203,5 +241,5 @@ jobs:
               
             } catch (error) {
               console.error('💥 ОШИБКА при обновлении карточки:', error);
-              console.log('🔧 Проверь: PROJECT_NUMBER, USER_LOGIN и права доступа');
+              console.log('🔧 Проверь: PROJECT_NUMBER, USER_LOGIN и права доступа PAT');
             }
