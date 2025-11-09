@@ -130,7 +130,13 @@ jobs:
               try {
                 const result = await github.graphql(query);
                 const fields = result.node.fields.nodes;
-                return fields.find(field => field.name === 'Status');
+                const statusField = fields.find(field => field.name === 'Status');
+                
+                if (statusField) {
+                  console.log('✅ Доступные статусы:', statusField.options.map(opt => `"${opt.name}"`).join(', '));
+                }
+                
+                return statusField;
               } catch (error) {
                 console.error(`❌ Ошибка при получении полей: ${error.message}`);
                 throw error;
@@ -220,12 +226,12 @@ jobs:
               if (event === 'pull_request') {
                 switch (action) {
                   case 'opened':
-                    console.log('📝 PR открыт → перемещаем в "In process"');
-                    return 'In process';
+                    console.log('📝 PR открыт → перемещаем в "In progress"');
+                    return 'In progress'; // Исправлено на "In progress"
                   
                   case 'reopened':
-                    console.log('🔄 PR переоткрыт → перемещаем в "In process"');
-                    return 'In process';
+                    console.log('🔄 PR переоткрыт → перемещаем в "In progress"');
+                    return 'In progress'; // Исправлено на "In progress"
                   
                   case 'ready_for_review':
                     console.log('👀 PR готов к ревью → перемещаем в "In review"');
@@ -260,6 +266,9 @@ jobs:
             function findStatusOptionId(statusField, statusName) {
               if (!statusField?.options) return null;
               
+              console.log(`🔍 Поиск опции для статуса: "${statusName}"`);
+              console.log(`🔍 Доступные опции:`, statusField.options.map(opt => opt.name));
+              
               // Ищем точное совпадение
               let option = statusField.options.find(opt => opt.name === statusName);
               
@@ -273,6 +282,12 @@ jobs:
                   option = similarOptions[0];
                   console.log(`🔍 Используем похожий статус: "${option.name}" вместо "${statusName}"`);
                 }
+              }
+              
+              if (option) {
+                console.log(`✅ Найдена опция: "${option.name}" с ID: ${option.id}`);
+              } else {
+                console.log(`❌ Опция для статуса "${statusName}" не найдена`);
               }
               
               return option?.id;
