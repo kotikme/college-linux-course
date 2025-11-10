@@ -2,7 +2,7 @@ name: Auto Project Board (v2)
 
 on:
   pull_request_target:
-    types: [opened, reopened, closed, synchronize]
+    types: [opened, reopened, synchronize, closed]
 
 permissions:
   contents: read
@@ -12,14 +12,129 @@ jobs:
   sync-project:
     runs-on: ubuntu-latest
     steps:
-      - name: Add or move PR to project (In review)
+      - name: Add or move PR to "In review"
         if: github.event.action != 'closed'
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.PROJECT_ACCESS_TOKEN }}
           script: |
-            const projectNumber = 7; // <-- твой проект
-            const columnName = "In review"; // колонка
+            const { context } = require('@actions/github');
+
+            const projectNumber = 7; // твой проект
+            const columnName = "In review"; // колонка в Project v2
+
+            // 1️⃣ Получаем данные о PR (безопасно)
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number
+            });
+            const prId = pr.node_id;
+
+            // 2️⃣ Получаем ID проекта
+            const queryProject = `
+              query($login: String!, $number: Int!) {
+                user(login: $login) {
+                  projectV2(number: $number) {
+                    id
+                  }
+                }
+              }`;
+
+            const projectData = await github.graphql(queryProject, {
+              login: "virusneo1997-del",
+              number: projectNumber
+            });
+
+            const projectId = projectData.user.projectV2.id;
+
+            // 3️⃣ Добавляем PR в проект
+            const addItem = `
+              mutation($projectId: ID!, $prId: ID!) {
+                addProjectV2ItemById(input: {projectId: $projectId, contentId: $prId}) {
+                  item {
+                    id
+                  }
+                }
+              }`;
+
+            const addResult = await github.graphql(addItem, {
+              projectId: projectId,
+              prId: prId
+            });
+
+            const itemId = addResult.addProjectV2ItemById.item.id;
+
+            // 4️⃣ Получаем ID поля "Status"
+            const fieldQuery = `
+              query($projectId: ID!) {
+                node(id: $projectId) {
+                  ... on ProjectV2 {
+                    fields(first: 20) {
+                      nodes {
+                        id
+                        name
+                        options {
+                          id
+                          name
+                        }
+                      }
+                    }
+                  }
+                }
+              }`;
+
+            const fieldData = await github.graphql(fieldQuery, { projectId });
+            const statusField = fieldData.node.fields.nodes.find(f => f.name === "Status");
+            const column = statusField?.options?.find(o => o.name === columnName);
+
+            if (!statusField || !column) {
+              core.setFailed(`❌ Не найдена колонка "${columnName}" в поле "Status"`);
+              return;
+            }
+
+            // 5️⃣ Перемещаем PR в нужную колонку
+            const setStatus = `
+              mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+                updateProjectV2ItemFieldValue(input: {
+                  projectId: $projectId,
+                  itemId: $itemId,
+                  fieldId: $fieldId,
+                  value: { singleSelectOptionId: $optionId }
+                }) {
+                  projectV2Item {
+                    id
+                  }
+                }
+              }`;
+
+            await github.graphql(setStatus, {
+              projectId,
+              itemId,
+              fieldId: statusField.id,
+              optionId: column.id
+            });
+
+            console.log("✅ PR добавлен в колонку 'In review'");
+
+      - name: Move to "To do" on close
+        if: github.event.action == 'closed'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PROJECT_ACCESS_TOKEN }}
+          script: |
+            const { context } = require('@actions/github');
+
+            const projectNumber = 7;
+            const columnName = "To do";
+
+            // Получаем данные о PR
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number
+            });
+            const prId = pr.node_id;
 
             // Получаем ID проекта
             const queryProject = `
@@ -38,25 +153,7 @@ jobs:
 
             const projectId = projectData.user.projectV2.id;
 
-            // Добавляем PR в проект
-            const addItem = `
-              mutation($projectId: ID!, $prId: ID!) {
-                addProjectV2ItemById(input: {projectId: $projectId, contentId: $prId}) {
-                  item {
-                    id
-                  }
-                }
-              }`;
-
-            const prId = github.event.pull_request.node_id;
-            const addResult = await github.graphql(addItem, {
-              projectId: projectId,
-              prId: prId
-            });
-
-            const itemId = addResult.addProjectV2ItemById.item.id;
-
-            // Получаем ID поля “Status”
+            // Получаем поле "Status"
             const fieldQuery = `
               query($projectId: ID!) {
                 node(id: $projectId) {
@@ -77,14 +174,14 @@ jobs:
 
             const fieldData = await github.graphql(fieldQuery, { projectId });
             const statusField = fieldData.node.fields.nodes.find(f => f.name === "Status");
-            const column = statusField.options.find(o => o.name === columnName);
+            const column = statusField?.options?.find(o => o.name === columnName);
 
             if (!statusField || !column) {
-              core.setFailed(`❌ Не найдена колонка "${columnName}" в поле Status`);
+              core.setFailed(`❌ Не найдена колонка "${columnName}" в поле "Status"`);
               return;
             }
 
-            // Устанавливаем колонку
+            // Перемещаем карточку обратно
             const setStatus = `
               mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
                 updateProjectV2ItemFieldValue(input: {
@@ -101,85 +198,9 @@ jobs:
 
             await github.graphql(setStatus, {
               projectId,
-              itemId,
+              itemId: prId,
               fieldId: statusField.id,
               optionId: column.id
             });
 
-            console.log("✅ PR успешно добавлен в колонку 'In review'!");
-
-      - name: Move to "To do" on close
-        if: github.event.action == 'closed'
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.PROJECT_ACCESS_TOKEN }}
-          script: |
-            const projectNumber = 7;
-            const columnName = "To do";
-
-            const queryProject = `
-              query($login: String!, $number: Int!) {
-                user(login: $login) {
-                  projectV2(number: $number) {
-                    id
-                  }
-                }
-              }`;
-
-            const projectData = await github.graphql(queryProject, {
-              login: "virusneo1997-del",
-              number: projectNumber
-            });
-
-            const projectId = projectData.user.projectV2.id;
-            const itemId = github.event.pull_request.node_id;
-
-            const fieldQuery = `
-              query($projectId: ID!) {
-                node(id: $projectId) {
-                  ... on ProjectV2 {
-                    fields(first: 20) {
-                      nodes {
-                        id
-                        name
-                        options {
-                          id
-                          name
-                        }
-                      }
-                    }
-                  }
-                }
-              }`;
-
-            const fieldData = await github.graphql(fieldQuery, { projectId });
-            const statusField = fieldData.node.fields.nodes.find(f => f.name === "Status");
-            const column = statusField.options.find(o => o.name === columnName);
-
-            if (!statusField || !column) {
-              core.setFailed(`❌ Не найдена колонка "${columnName}" в поле Status`);
-              return;
-            }
-
-            const setStatus = `
-              mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
-                updateProjectV2ItemFieldValue(input: {
-                  projectId: $projectId,
-                  itemId: $itemId,
-                  fieldId: $fieldId,
-                  value: { singleSelectOptionId: $optionId }
-                }) {
-                  projectV2Item {
-                    id
-                  }
-                }
-              }`;
-
-            await github.graphql(setStatus, {
-              projectId,
-              itemId,
-              fieldId: statusField.id,
-              optionId: column.id
-            });
-
-            console.log("🔁 Карточка перемещена обратно в 'To do'");
+            console.log("🔁 PR перемещён в 'To do'");
